@@ -16,7 +16,8 @@ Claude requests use `output_config.effort: "medium"`, no sampling parameters, an
 **Not verified:**
 - No live Claude API call was made; the Anthropic path was tested only against a mocked HTTP transport.
 - The OASIS/camel simulation path (`backend/scripts/run_*_simulation.py`) was not executed (camel/oasis not installed); it uses camel's Anthropic backend, which calls Anthropic's OpenAI-compatible endpoint.
-- Third-party dependencies' own network behaviour (camel-ai, oasis, tiktoken, npm/Vite tooling, etc.) was not audited.
+- Third-party dependencies were audited statically only (source read, nothing executed). Two automatic downloads remain; neither carries user text: the `Twitter/twhin-bert-base` model from `huggingface.co` (Twitter simulation only) and the tiktoken vocabulary from `openaipublic.blob.core.windows.net` (first token count). Both can be blocked with `HF_HUB_OFFLINE=1` and a preloaded `TIKTOKEN_CACHE_DIR`. Large binary packages (torch, nvidia-*) and the `mcp` package were not read.
+- The API has no authentication and listens on all network interfaces by default (`FLASK_HOST`, `vite --host`, compose ports). This fork does not change that.
 - Graph search is lexical (BM25 over SQLite FTS5 trigrams), not semantic; results differ from Zep's hybrid search.
 - The Docker image build (`docker compose up --build`) was not run.
 - Extraction quality and cost on large documents were not measured (every chunk, and every simulated agent action written to the graph, is one or more LLM calls).
