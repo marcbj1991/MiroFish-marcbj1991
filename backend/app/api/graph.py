@@ -9,7 +9,6 @@ import traceback
 import threading
 from contextlib import ExitStack, nullcontext
 from flask import request, jsonify
-from zep_cloud import NotFoundError
 
 from . import graph_bp
 from ..config import Config
@@ -26,6 +25,7 @@ from ..services.simulation_manager import SimulationManager
 from ..services.simulation_runner import SimulationRunner, RunnerStatus
 from ..services.zep_graph_memory_updater import ZepGraphMemoryManager
 from ..utils.llm_client import LLMResponseError
+from ..utils.local_graph import NotFoundError
 
 # 获取日志器
 logger = get_logger('mirofish.api')
@@ -89,9 +89,9 @@ def _delete_cloud_graph_if_present(graph_id: str | None) -> None:
                 f"{', '.join(active_simulations)}"
             )
         try:
-            GraphBuilderService(api_key=Config.ZEP_API_KEY).delete_graph(graph_id)
+            GraphBuilderService().delete_graph(graph_id)
         except NotFoundError:
-            logger.info("Zep Cloud graph already absent: %s", graph_id)
+            logger.info("Graph already absent: %s", graph_id)
 
 
 def _clear_project_graph_reference(project) -> None:
@@ -482,17 +482,6 @@ def _build_graph_impl():
     try:
         logger.info("=== 开始构建图谱 ===")
         
-        # 检查配置
-        errors = []
-        if not Config.ZEP_API_KEY:
-            errors.append(t('api.zepApiKeyMissing'))
-        if errors:
-            logger.error(f"配置错误: {errors}")
-            return jsonify({
-                "success": False,
-                "error": t('api.configError', details="; ".join(errors))
-            }), 500
-        
         # 解析请求
         data = request.get_json() or {}
         project_id = data.get('project_id')
@@ -546,7 +535,7 @@ def _build_graph_impl():
                 and project.zep_batch_id
                 and project.zep_batch_operation_id
             ):
-                builder = GraphBuilderService(api_key=Config.ZEP_API_KEY)
+                builder = GraphBuilderService()
                 batch_summary = builder.get_batch_summary(project.zep_batch_id)
                 if getattr(batch_summary, "status", None) in {
                     "queued",
@@ -660,7 +649,7 @@ def _build_graph_impl():
                 )
                 
                 # 创建图谱构建服务
-                builder = GraphBuilderService(api_key=Config.ZEP_API_KEY)
+                builder = GraphBuilderService()
                 
                 # 分块
                 task_manager.update_task(
@@ -882,13 +871,7 @@ def get_graph_data(graph_id: str):
     获取图谱数据（节点和边）
     """
     try:
-        if not Config.ZEP_API_KEY:
-            return jsonify({
-                "success": False,
-                "error": t('api.zepApiKeyMissing')
-            }), 500
-        
-        builder = GraphBuilderService(api_key=Config.ZEP_API_KEY)
+        builder = GraphBuilderService()
         graph_data = builder.get_graph_data(graph_id)
         
         return jsonify({
@@ -910,12 +893,6 @@ def delete_graph(graph_id: str):
     删除Zep图谱
     """
     try:
-        if not Config.ZEP_API_KEY:
-            return jsonify({
-                "success": False,
-                "error": t('api.zepApiKeyMissing')
-            }), 500
-        
         projects = ProjectManager.find_projects_by_graph_id(graph_id)
         if not projects:
             return jsonify({

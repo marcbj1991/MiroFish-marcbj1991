@@ -5,9 +5,7 @@ Zep实体读取与过滤服务
 
 from typing import Dict, Any, List, Optional, Set, Callable, TypeVar
 from dataclasses import dataclass, field
-from zep_cloud import NotFoundError
-
-from ..config import Config
+from ..utils.local_graph import NotFoundError
 from ..utils.logger import get_logger
 from ..utils.zep_paging import fetch_all_nodes, fetch_all_edges
 from ..utils.zep import call_zep_read_with_retry, get_zep_client
@@ -77,12 +75,8 @@ class ZepEntityReader:
     3. 获取每个实体的相关边和关联节点信息
     """
     
-    def __init__(self, api_key: Optional[str] = None):
-        self.api_key = api_key or Config.ZEP_API_KEY
-        if not self.api_key:
-            raise ValueError("ZEP_API_KEY 未配置")
-        
-        self.client = get_zep_client(self.api_key)
+    def __init__(self):
+        self.client = get_zep_client()
     
     def _call_with_retry(
         self, 
@@ -172,31 +166,22 @@ class ZepEntityReader:
         graph_id: Optional[str] = None,
     ) -> List[Dict[str, Any]]:
         """
-        获取指定节点的相关边。
-
-        Zep Cloud 3.25 的 ``graph.node.get_edges`` 实测只返回节点作为
-        source 的边，尽管文档将其描述为“all edges”。需要完整上下文时必须
-        提供 graph_id，以全图分页后同时筛选 incoming 和 outgoing 边。
+        获取指定节点的相关边（incoming 和 outgoing）。
         
         Args:
             node_uuid: 节点UUID
-            graph_id: 图谱ID；提供时保证返回双向完整关系
+            graph_id: 图谱ID（必需：所有读取都限定在一个图谱内）
             
         Returns:
             边列表
         """
+        if not graph_id:
+            raise ValueError("graph_id is required")
         try:
-            if graph_id:
-                return [
-                    edge
-                    for edge in self.get_all_edges(graph_id)
-                    if edge["source_node_uuid"] == node_uuid
-                    or edge["target_node_uuid"] == node_uuid
-                ]
-
-            # 使用重试机制调用Zep API
             edges = self._call_with_retry(
-                func=lambda: self.client.graph.node.get_edges(node_uuid=node_uuid),
+                func=lambda: self.client.graph.node.get_edges(
+                    node_uuid=node_uuid, graph_id=graph_id
+                ),
                 operation_name=f"获取节点边(node={node_uuid[:8]}...)"
             )
             
@@ -354,7 +339,9 @@ class ZepEntityReader:
         try:
             # 使用重试机制获取节点
             node = self._call_with_retry(
-                func=lambda: self.client.graph.node.get(uuid_=entity_uuid),
+                func=lambda: self.client.graph.node.get(
+                    uuid_=entity_uuid, graph_id=graph_id
+                ),
                 operation_name=f"获取节点详情(uuid={entity_uuid[:8]}...)"
             )
             
@@ -415,9 +402,9 @@ class ZepEntityReader:
         except NotFoundError:
             return None
         except Exception as e:
-            # Only an actual Zep 404 means "entity not found". Propagate 401,
-            # 403 and exhausted transport errors so callers cannot prepare a
-            # simulation with silently incomplete graph context.
+            # Only NotFoundError means "entity not found". Propagate other
+            # errors so callers cannot prepare a simulation with silently
+            # incomplete graph context.
             logger.error(f"获取实体 {entity_uuid} 失败: {str(e)}")
             raise
     

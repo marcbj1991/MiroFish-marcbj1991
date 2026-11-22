@@ -438,6 +438,20 @@ class TwitterSimulationRunner:
         llm_base_url = os.environ.get("LLM_BASE_URL", "")
         llm_model = os.environ.get("LLM_MODEL_NAME", "")
         
+        llm_provider = os.environ.get("LLM_PROVIDER", "anthropic").strip().lower()
+        if llm_provider == "anthropic":
+            # Claude through camel's Anthropic backend; LLM_BASE_URL is not used.
+            llm_model = llm_model or "claude-opus-5-5"
+            if not llm_api_key:
+                raise ValueError("缺少 API Key 配置，请在项目根目录 .env 文件中设置 LLM_API_KEY")
+            os.environ["ANTHROPIC_API_KEY"] = llm_api_key
+            print(f"LLM配置: provider=anthropic, model={llm_model}")
+            return ModelFactory.create(
+                model_platform=ModelPlatformType.ANTHROPIC,
+                model_type=llm_model,
+                api_key=llm_api_key,
+            )
+        
         # 如果 .env 中没有，则使用 config 作为备用
         if not llm_model:
             llm_model = self.config.get("llm_model", "gpt-4o-mini")

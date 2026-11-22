@@ -1,37 +1,40 @@
-"""Shared Zep Cloud client, request limits, and retry policy."""
+"""Shared local graph client, request limits, and read retry policy.
+
+The module name is kept from the former Zep Cloud integration; the client it
+returns is the local SQLite store in ``local_graph.py``.
+"""
 
 from __future__ import annotations
 
 import os
+import sqlite3
+import threading
 import time
-from functools import lru_cache
 from typing import Any, Callable, TypeVar
 
-import httpx
-from zep_cloud.client import Zep
-from zep_cloud.core.api_error import ApiError as ZepApiError
-
 from ..config import Config
+from .local_graph import LocalGraphClient
 from .logger import get_logger
 
 logger = get_logger("mirofish.zep")
 
 T = TypeVar("T")
 
-ZEP_CLOUD_BASE_URL = "https://api.getzep.com/api/v2"
-# Keep request behavior aligned with the zep-cloud 3.25.0 SDK default that
-# MiroFish used before introducing the shared client. This is an internal
-# integration policy, not a deployment setting users need to tune.
-ZEP_HTTP_REQUEST_TIMEOUT_SECONDS = 60.0
-# Zep ingestion is asynchronous and may take several minutes. Preserve the
-# original GraphBuilder deadline while keeping it separate from HTTP timeout.
-ZEP_INGESTION_WAIT_TIMEOUT_SECONDS = 600
+# Upper bound for waiting on graph ingestion (LLM extraction of every chunk
+# runs through the configured model and can take a long time).
+ZEP_INGESTION_WAIT_TIMEOUT_SECONDS = 3600
+# Allowance for one in-flight graph write (one LLM extraction request; the
+# Anthropic SDK default request timeout is 10 minutes).
+ZEP_HTTP_REQUEST_TIMEOUT_SECONDS = 600.0
 MAX_ZEP_SEARCH_QUERY_CHARS = 400
 MAX_ZEP_SEARCH_RESULTS = 50
 
+_clients: dict[str, LocalGraphClient] = {}
+_clients_guard = threading.Lock()
+
 
 def normalize_zep_search_query(query: Any) -> str:
-    """Return a non-empty query within Zep Cloud's endpoint limit."""
+    """Return a non-empty, length-capped search query."""
 
     if not isinstance(query, str):
         raise ValueError("Zep search query must be a string")
@@ -42,7 +45,7 @@ def normalize_zep_search_query(query: Any) -> str:
 
 
 def normalize_zep_search_limit(limit: Any) -> int:
-    """Clamp a search result limit to the current Zep Cloud contract."""
+    """Clamp a search result limit."""
 
     try:
         normalized = int(limit)
@@ -53,74 +56,32 @@ def normalize_zep_search_limit(limit: Any) -> int:
     return min(normalized, MAX_ZEP_SEARCH_RESULTS)
 
 
-@lru_cache(maxsize=4)
-def _cached_zep_client(api_key: str, timeout: float) -> Zep:
-    return Zep(
-        api_key=api_key,
-        base_url=ZEP_CLOUD_BASE_URL,
-        timeout=timeout,
-    )
+def get_zep_client(db_path: str | None = None) -> LocalGraphClient:
+    """Return the process-shared local graph client for ``db_path``."""
 
-
-def get_zep_client(api_key: str | None = None, timeout: float | None = None) -> Zep:
-    """Return a process-shared, explicitly configured Zep Cloud client."""
-
-    # zep-cloud gives ZEP_API_URL precedence even when base_url is explicit.
-    # Reject it so this Cloud-only integration cannot silently target a
-    # self-hosted or compatibility endpoint.
-    if os.environ.get("ZEP_API_URL"):
-        raise ValueError("ZEP_API_URL is unsupported; unset it to use Zep Cloud")
-
-    normalized_key = (api_key or Config.ZEP_API_KEY or "").strip()
-    if not normalized_key:
-        raise ValueError("ZEP_API_KEY 未配置")
-
-    request_timeout = float(
-        timeout if timeout is not None else ZEP_HTTP_REQUEST_TIMEOUT_SECONDS
-    )
-    if request_timeout <= 0:
-        raise ValueError("Zep request timeout must be greater than 0")
-    return _cached_zep_client(normalized_key, request_timeout)
+    path = os.path.abspath(db_path or Config.GRAPH_DB_PATH)
+    with _clients_guard:
+        client = _clients.get(path)
+        if client is None:
+            client = LocalGraphClient(path)
+            _clients[path] = client
+        return client
 
 
 def clear_zep_client_cache() -> None:
     """Clear cached clients. Intended for tests and controlled reconfiguration."""
 
-    _cached_zep_client.cache_clear()
+    with _clients_guard:
+        _clients.clear()
 
 
 def is_retryable_zep_error(error: BaseException) -> bool:
     """Return whether a failed *read* is safe and useful to retry."""
 
-    if isinstance(error, (httpx.TimeoutException, httpx.TransportError)):
-        return True
-    if isinstance(error, (ConnectionError, TimeoutError, OSError)):
-        return True
-    if isinstance(error, ZepApiError):
-        status_code = error.status_code
-        return status_code in {408, 429} or (
-            status_code is not None and 500 <= status_code <= 599
-        )
+    if isinstance(error, sqlite3.OperationalError):
+        message = str(error).lower()
+        return "locked" in message or "busy" in message
     return False
-
-
-def _retry_after_seconds(error: BaseException) -> float | None:
-    if not isinstance(error, ZepApiError) or not error.headers:
-        return None
-    value = next(
-        (
-            header_value
-            for header_name, header_value in error.headers.items()
-            if header_name.lower() == "retry-after"
-        ),
-        None,
-    )
-    if value is None:
-        return None
-    try:
-        return max(0.0, float(value))
-    except (TypeError, ValueError):
-        return None
 
 
 def call_zep_read_with_retry(
@@ -132,7 +93,7 @@ def call_zep_read_with_retry(
     max_delay: float = 60.0,
     sleep: Callable[[float], None] = time.sleep,
 ) -> T:
-    """Retry a safe Zep read only for transport, 408, 429, or 5xx errors."""
+    """Retry a safe read only when the SQLite database is busy/locked."""
 
     if max_attempts < 1:
         raise ValueError("max_attempts must be at least 1")
@@ -144,13 +105,9 @@ def call_zep_read_with_retry(
             if attempt == max_attempts or not is_retryable_zep_error(error):
                 raise
 
-            retry_after = _retry_after_seconds(error)
-            delay = min(
-                retry_after if retry_after is not None else initial_delay * (2 ** (attempt - 1)),
-                max_delay,
-            )
+            delay = min(initial_delay * (2 ** (attempt - 1)), max_delay)
             logger.warning(
-                "Zep %s attempt %s/%s failed (%s); retrying in %.1fs",
+                "Graph %s attempt %s/%s failed (%s); retrying in %.1fs",
                 operation_name,
                 attempt,
                 max_attempts,

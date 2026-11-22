@@ -12,9 +12,7 @@ import time
 import json
 from typing import Dict, Any, List, Optional
 from dataclasses import dataclass, field
-from zep_cloud import NotFoundError
-
-from ..config import Config
+from ..utils.local_graph import NotFoundError
 from ..utils.logger import get_logger
 from ..utils.llm_client import LLMClient
 from ..utils.locale import get_locale, t
@@ -427,12 +425,8 @@ class ZepToolsService:
     MAX_RETRIES = 3
     RETRY_DELAY = 2.0
     
-    def __init__(self, api_key: Optional[str] = None, llm_client: Optional[LLMClient] = None):
-        self.api_key = api_key or Config.ZEP_API_KEY
-        if not self.api_key:
-            raise ValueError("ZEP_API_KEY 未配置")
-        
-        self.client = get_zep_client(self.api_key)
+    def __init__(self, llm_client: Optional[LLMClient] = None):
+        self.client = get_zep_client()
         # LLM客户端用于InsightForge生成子问题
         self._llm_client = llm_client
         logger.info(t("console.zepToolsInitialized"))
@@ -464,8 +458,7 @@ class ZepToolsService:
         """
         图谱语义搜索
         
-        使用混合搜索（语义+BM25）在图谱中搜索相关信息。
-        如果Zep Cloud的search API不可用，则降级为本地关键词匹配。
+        使用本地全文检索（SQLite FTS5 BM25，词法匹配，非语义）在图谱中搜索相关信息。
         
         Args:
             graph_id: 图谱ID (Standalone Graph)
@@ -709,12 +702,13 @@ class ZepToolsService:
         logger.info(t("console.fetchedEdges", count=len(result)))
         return result
     
-    def get_node_detail(self, node_uuid: str) -> Optional[NodeInfo]:
+    def get_node_detail(self, node_uuid: str, graph_id: str) -> Optional[NodeInfo]:
         """
         获取单个节点的详细信息
         
         Args:
             node_uuid: 节点UUID
+            graph_id: 图谱ID（读取限定在该图谱内）
             
         Returns:
             节点信息或None
@@ -723,7 +717,9 @@ class ZepToolsService:
         
         try:
             node = self._call_with_retry(
-                func=lambda: self.client.graph.node.get(uuid_=node_uuid),
+                func=lambda: self.client.graph.node.get(
+                    uuid_=node_uuid, graph_id=graph_id
+                ),
                 operation_name=t("console.fetchNodeDetailOp", uuid=node_uuid[:8])
             )
             
@@ -1041,7 +1037,7 @@ class ZepToolsService:
                 continue
             try:
                 # 单独获取每个相关节点的信息
-                node = self.get_node_detail(uuid)
+                node = self.get_node_detail(uuid, graph_id)
                 if node:
                     node_map[uuid] = node
                     entity_type = next((l for l in node.labels if l not in ["Entity", "Node"]), "实体")

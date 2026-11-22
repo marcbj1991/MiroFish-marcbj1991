@@ -1,20 +1,16 @@
 from types import SimpleNamespace
 
+import pytest
+
 from app.services.zep_entity_reader import ZepEntityReader
-from zep_cloud.graph.node.client import NodeClient
 
 
-def test_pinned_zep_sdk_exposes_get_edges_not_get_entity_edges():
-    assert hasattr(NodeClient, "get_edges")
-    assert not hasattr(NodeClient, "get_entity_edges")
-
-
-def test_get_node_edges_uses_the_supported_sdk_method():
+def test_get_node_edges_reads_within_the_given_graph():
     calls = []
 
     class NodeApi:
-        def get_edges(self, *, node_uuid):
-            calls.append(node_uuid)
+        def get_edges(self, *, node_uuid, graph_id):
+            calls.append((node_uuid, graph_id))
             return [SimpleNamespace(
                 uuid_="edge-1",
                 name="KNOWS",
@@ -33,7 +29,7 @@ def test_get_node_edges_uses_the_supported_sdk_method():
     reader = object.__new__(ZepEntityReader)
     reader.client = Client()
 
-    assert reader.get_node_edges("node-1") == [{
+    assert reader.get_node_edges("node-1", graph_id="graph-1") == [{
         "uuid": "edge-1",
         "name": "KNOWS",
         "fact": "Alice knows Bob",
@@ -41,4 +37,12 @@ def test_get_node_edges_uses_the_supported_sdk_method():
         "target_node_uuid": "node-2",
         "attributes": {"since": "2024"},
     }]
-    assert calls == ["node-1"]
+    assert calls == [("node-1", "graph-1")]
+
+
+def test_get_node_edges_requires_a_graph_id():
+    reader = object.__new__(ZepEntityReader)
+    reader.client = None
+
+    with pytest.raises(ValueError, match="graph_id"):
+        reader.get_node_edges("node-1")

@@ -15,8 +15,8 @@ from typing import Dict, Any, List, Optional
 from dataclasses import dataclass, field
 from datetime import datetime
 
-from openai import OpenAI
 from ..config import Config
+from ..utils.llm_client import create_llm_sdk_client
 from ..utils.logger import get_logger
 from ..utils.locale import get_language_instruction, get_locale, set_locale, t
 from ..utils.openai_chat_compat import create_chat_completion, extract_chat_completion_text
@@ -245,7 +245,6 @@ class OasisProfileGenerator:
         api_key: Optional[str] = None,
         base_url: Optional[str] = None,
         model_name: Optional[str] = None,
-        zep_api_key: Optional[str] = None,
         graph_id: Optional[str] = None
     ):
         self.api_key = api_key or Config.LLM_API_KEY
@@ -255,21 +254,11 @@ class OasisProfileGenerator:
         if not self.api_key:
             raise ValueError("LLM_API_KEY 未配置")
         
-        self.client = OpenAI(
-            api_key=self.api_key,
-            base_url=self.base_url
-        )
+        self.client = create_llm_sdk_client(self.api_key, self.base_url)
         
-        # Zep客户端用于检索丰富上下文
-        self.zep_api_key = zep_api_key or Config.ZEP_API_KEY
-        self.zep_client = None
+        # 本地图谱客户端用于检索丰富上下文
         self.graph_id = graph_id
-        
-        if self.zep_api_key:
-            try:
-                self.zep_client = get_zep_client(self.zep_api_key)
-            except Exception as e:
-                logger.warning(f"Zep客户端初始化失败: {e}")
+        self.zep_client = get_zep_client()
     
     def generate_profile_from_entity(
         self, 

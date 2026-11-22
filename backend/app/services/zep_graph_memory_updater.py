@@ -10,7 +10,6 @@ from dataclasses import dataclass
 from datetime import datetime
 from queue import Queue, Empty
 
-from ..config import Config
 from ..utils.logger import get_logger
 from ..utils.locale import get_locale, set_locale
 from ..utils.zep import (
@@ -243,24 +242,17 @@ class ZepGraphMemoryUpdater:
     def __init__(
         self,
         graph_id: str,
-        api_key: Optional[str] = None,
         simulation_id: Optional[str] = None,
     ):
         """
         初始化更新器
         
         Args:
-            graph_id: Zep图谱ID
-            api_key: Zep API Key（可选，默认从配置读取）
+            graph_id: 图谱ID
         """
         self.graph_id = graph_id
         self.simulation_id = simulation_id or "unknown"
-        self.api_key = api_key or Config.ZEP_API_KEY
-        
-        if not self.api_key:
-            raise ValueError("ZEP_API_KEY未配置")
-        
-        self.client = get_zep_client(self.api_key)
+        self.client = get_zep_client()
         
         # 活动队列
         self._activity_queue: Queue = Queue()
@@ -611,7 +603,9 @@ class ZepGraphMemoryUpdater:
                 )
             for episode_uuid in list(pending):
                 episode = call_zep_read_with_retry(
-                    lambda: self.client.graph.episode.get(uuid_=episode_uuid),
+                    lambda: self.client.graph.episode.get(
+                        uuid_=episode_uuid, graph_id=self.graph_id
+                    ),
                     operation_name=f"poll simulation episode {episode_uuid}",
                 )
                 if getattr(episode, "processed", False):

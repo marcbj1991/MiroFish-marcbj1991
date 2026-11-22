@@ -1015,6 +1015,21 @@ def create_model(config: Dict[str, Any], use_boost: bool = False):
         llm_model = os.environ.get("LLM_MODEL_NAME", "")
         config_label = "[通用LLM]"
     
+    llm_provider = os.environ.get("LLM_PROVIDER", "anthropic").strip().lower()
+    if llm_provider == "anthropic":
+        # Claude through camel's Anthropic backend. The boost settings share
+        # the provider; LLM_BOOST_BASE_URL / LLM_BASE_URL are not used.
+        llm_model = llm_model or "claude-opus-5-5"
+        if not llm_api_key:
+            raise ValueError("缺少 API Key 配置，请在项目根目录 .env 文件中设置 LLM_API_KEY")
+        os.environ["ANTHROPIC_API_KEY"] = llm_api_key
+        print(f"{config_label} provider=anthropic, model={llm_model}")
+        return ModelFactory.create(
+            model_platform=ModelPlatformType.ANTHROPIC,
+            model_type=llm_model,
+            api_key=llm_api_key,
+        )
+
     # 如果 .env 中没有模型名，则使用 config 作为备用
     if not llm_model:
         llm_model = config.get("llm_model", "gpt-4o-mini")

@@ -24,13 +24,19 @@ class Config:
     # JSON配置 - 禁用ASCII转义，让中文直接显示
     JSON_AS_ASCII = False
     
-    # LLM配置（统一使用OpenAI格式）
+    # LLM provider: "anthropic" (default, official Anthropic SDK) or "openai"
+    # (any OpenAI-compatible server, e.g. a local Ollama endpoint).
+    LLM_PROVIDER = os.environ.get('LLM_PROVIDER', 'anthropic').strip().lower()
     LLM_API_KEY = os.environ.get('LLM_API_KEY')
+    # Only used by the "openai" provider.
     LLM_BASE_URL = os.environ.get('LLM_BASE_URL', 'https://api.openai.com/v1')
-    LLM_MODEL_NAME = os.environ.get('LLM_MODEL_NAME', 'gpt-4o-mini')
+    LLM_MODEL_NAME = os.environ.get(
+        'LLM_MODEL_NAME',
+        'claude-opus-5-5' if LLM_PROVIDER == 'anthropic' else 'gpt-4o-mini',
+    )
     
-    # Zep配置
-    ZEP_API_KEY = os.environ.get('ZEP_API_KEY')
+    # Local knowledge graph store (SQLite file, replaces Zep Cloud)
+    GRAPH_DB_PATH = os.path.join(os.path.dirname(__file__), '../uploads/graph/graph.sqlite3')
     
     # 文件上传配置
     MAX_CONTENT_LENGTH = 50 * 1024 * 1024  # 50MB
@@ -66,10 +72,12 @@ class Config:
         errors: list[str] = []
         if not cls.LLM_API_KEY:
             errors.append("LLM_API_KEY 未配置")
-        if not cls.ZEP_API_KEY:
-            errors.append("ZEP_API_KEY 未配置")
-        if os.environ.get("ZEP_API_URL"):
-            errors.append("ZEP_API_URL 不受支持；MiroFish 仅连接 Zep Cloud")
+        if cls.LLM_PROVIDER not in ("anthropic", "openai"):
+            errors.append("LLM_PROVIDER must be 'anthropic' or 'openai'")
+        from .utils.local_graph import sqlite_fts5_error
+        fts5_error = sqlite_fts5_error()
+        if fts5_error:
+            errors.append(fts5_error)
         if cls.DEBUG:
             import warnings
             warnings.warn("Flask DEBUG mode is enabled. Do not use in production.", RuntimeWarning)
