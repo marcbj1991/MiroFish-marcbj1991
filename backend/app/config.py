@@ -34,6 +34,8 @@ class Config:
         'LLM_MODEL_NAME',
         'claude-opus-5-5' if LLM_PROVIDER == 'anthropic' else 'gpt-4o-mini',
     )
+    # Per-stage models (optional): LLM_MODEL_GRAPH, LLM_MODEL_SIMULATION,
+    # LLM_MODEL_REPORT. Resolve them with resolve_stage_model(), never here.
     
     # Local knowledge graph store (SQLite file, replaces Zep Cloud)
     GRAPH_DB_PATH = os.path.join(os.path.dirname(__file__), '../uploads/graph/graph.sqlite3')
@@ -82,3 +84,64 @@ class Config:
             import warnings
             warnings.warn("Flask DEBUG mode is enabled. Do not use in production.", RuntimeWarning)
         return errors
+
+
+# ---------------------------------------------------------------------------
+# Per-stage model selection (single source of truth, also used by the
+# simulation scripts in backend/scripts/).
+# ---------------------------------------------------------------------------
+
+LLM_STAGES = ("graph", "simulation", "report")
+
+STAGE_MODEL_ENV_VARS = {
+    "graph": "LLM_MODEL_GRAPH",
+    "simulation": "LLM_MODEL_SIMULATION",
+    "report": "LLM_MODEL_REPORT",
+}
+
+# Built-in defaults when neither the stage variable nor LLM_MODEL_NAME is set.
+ANTHROPIC_STAGE_DEFAULT_MODELS = {
+    "graph": "claude-sonnet-5-5",
+    "simulation": "claude-haiku-5-5",
+    "report": "claude-opus-5-5",
+}
+# The "openai" provider is any compatible server, so there is no per-stage
+# default: every stage keeps the upstream fallback.
+OPENAI_DEFAULT_MODEL = "gpt-4o-mini"
+
+
+def resolve_stage_model(
+    stage: str,
+    provider: str | None = None,
+    default: str | None = None,
+) -> str:
+    """Return the model id for one pipeline stage.
+
+    Precedence:
+      1. the stage variable (LLM_MODEL_GRAPH / _SIMULATION / _REPORT), if non-empty;
+      2. LLM_MODEL_NAME, if non-empty (one model for every stage);
+      3. ``default`` if given and non-empty, else the provider's built-in
+         default for the stage.
+
+    Variables are read from ``os.environ`` at call time. ``provider`` defaults
+    to ``Config.LLM_PROVIDER``.
+    """
+
+    if stage not in STAGE_MODEL_ENV_VARS:
+        raise ValueError(f"Unknown LLM stage: {stage!r} (expected one of {LLM_STAGES})")
+
+    stage_model = os.environ.get(STAGE_MODEL_ENV_VARS[stage], "").strip()
+    if stage_model:
+        return stage_model
+
+    shared_model = os.environ.get("LLM_MODEL_NAME", "").strip()
+    if shared_model:
+        return shared_model
+
+    if default and default.strip():
+        return default.strip()
+
+    provider = (provider or Config.LLM_PROVIDER).strip().lower()
+    if provider == "anthropic":
+        return ANTHROPIC_STAGE_DEFAULT_MODELS[stage]
+    return OPENAI_DEFAULT_MODEL

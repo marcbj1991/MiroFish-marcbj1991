@@ -17,7 +17,7 @@ from typing import Optional, Dict, Any, List
 import anthropic
 from openai import OpenAI
 
-from ..config import Config
+from ..config import Config, resolve_stage_model
 from .openai_chat_compat import create_chat_completion, extract_chat_completion_text
 
 
@@ -231,11 +231,19 @@ class LLMClient:
         self,
         api_key: Optional[str] = None,
         base_url: Optional[str] = None,
-        model: Optional[str] = None
+        model: Optional[str] = None,
+        stage: Optional[str] = None,
     ):
         self.api_key = api_key or Config.LLM_API_KEY
         self.base_url = base_url or Config.LLM_BASE_URL
-        self.model = model or Config.LLM_MODEL_NAME
+        # An explicit model wins; otherwise the pipeline stage picks it
+        # (see config.resolve_stage_model).
+        if model:
+            self.model = model
+        elif stage:
+            self.model = resolve_stage_model(stage)
+        else:
+            self.model = Config.LLM_MODEL_NAME
         
         if not self.api_key:
             raise ValueError("LLM_API_KEY 未配置")

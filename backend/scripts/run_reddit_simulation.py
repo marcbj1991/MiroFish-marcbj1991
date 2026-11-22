@@ -443,12 +443,14 @@ class RedditSimulationRunner:
         # 优先从 .env 读取配置
         llm_api_key = os.environ.get("LLM_API_KEY", "")
         llm_base_url = os.environ.get("LLM_BASE_URL", "")
-        llm_model = os.environ.get("LLM_MODEL_NAME", "")
+        # Simulation-stage model: LLM_MODEL_SIMULATION > LLM_MODEL_NAME >
+        # provider default (rule lives in app.config.resolve_stage_model).
+        from app.config import resolve_stage_model
         
         llm_provider = os.environ.get("LLM_PROVIDER", "anthropic").strip().lower()
         if llm_provider == "anthropic":
             # Claude through camel's Anthropic backend; LLM_BASE_URL is not used.
-            llm_model = llm_model or "claude-opus-5-5"
+            llm_model = resolve_stage_model("simulation", provider="anthropic")
             if not llm_api_key:
                 raise ValueError("缺少 API Key 配置，请在项目根目录 .env 文件中设置 LLM_API_KEY")
             os.environ["ANTHROPIC_API_KEY"] = llm_api_key
@@ -460,8 +462,10 @@ class RedditSimulationRunner:
             )
         
         # 如果 .env 中没有，则使用 config 作为备用
-        if not llm_model:
-            llm_model = self.config.get("llm_model", "gpt-4o-mini")
+        # (openai: the config's llm_model, then the upstream fallback)
+        llm_model = resolve_stage_model(
+            "simulation", provider=llm_provider, default=self.config.get("llm_model")
+        )
         
         # 设置 camel-ai 所需的环境变量
         if llm_api_key:

@@ -309,7 +309,11 @@ class LocalGraphStore:
 
     def __init__(self, db_path: str, llm: Any = None):
         self.db_path = db_path
+        # An injected client serves every stage; otherwise one LLMClient per
+        # stage is created on first use.
         self._llm = llm
+        self._stage_llms: Dict[str, Any] = {}
+        self._llm_guard = threading.Lock()
         self._write_lock = threading.RLock()
         self._active_batches: set[str] = set()
         self._active_guard = threading.Lock()
@@ -336,13 +340,22 @@ class LocalGraphStore:
         finally:
             connection.close()
 
-    @property
-    def llm(self) -> Any:
-        if self._llm is None:
-            from .llm_client import LLMClient
+    def llm_for(self, stage: str) -> Any:
+        """Return the LLM client for a pipeline stage.
 
-            self._llm = LLMClient()
-        return self._llm
+        Uploaded document chunks (batch ingestion) use the "graph" stage;
+        simulation activity written with ``graph.add`` uses "simulation".
+        """
+        if self._llm is not None:
+            return self._llm
+        with self._llm_guard:
+            client = self._stage_llms.get(stage)
+            if client is None:
+                from .llm_client import LLMClient
+
+                client = LLMClient(stage=stage)
+                self._stage_llms[stage] = client
+            return client
 
     # -- row mapping ------------------------------------------------------
 
@@ -561,11 +574,13 @@ class LocalGraphStore:
             {"role": "user", "content": body},
         ]
 
-    def extract(self, ontology: Dict[str, Any], texts: List[str]) -> Dict[str, Any]:
-        """Call the LLM once for ``texts`` and validate the JSON shape."""
+    def extract(
+        self, ontology: Dict[str, Any], texts: List[str], stage: str = "graph"
+    ) -> Dict[str, Any]:
+        """Call the ``stage`` LLM once for ``texts`` and validate the JSON shape."""
 
         try:
-            result = self.llm.chat_json(
+            result = self.llm_for(stage).chat_json(
                 self._extraction_messages(ontology, texts),
                 temperature=0.0,
                 max_tokens=16000,
@@ -779,7 +794,9 @@ class LocalGraphStore:
             )
         ontology = self.get_ontology(graph_id)
         try:
-            extraction = self.extract(ontology, [data])
+            # graph.add is only called for simulated agent activity (high
+            # volume), so it uses the simulation model, not the graph model.
+            extraction = self.extract(ontology, [data], stage="simulation")
             with self._write_lock, self._connect() as connection:
                 self._write_extraction(
                     connection, graph_id, ontology, extraction, [episode_uuid],
@@ -900,7 +917,9 @@ class LocalGraphStore:
                 indexes = [row["sequence_index"] for row in group]
                 episode_uuids = [row["episode_uuid"] for row in group]
                 try:
-                    extraction = self.extract(ontology, [row["content"] for row in group])
+                    extraction = self.extract(
+                        ontology, [row["content"] for row in group], stage="graph"
+                    )
                     with self._write_lock, self._connect() as connection:
                         self._write_extraction(
                             connection, graph_id, ontology, extraction, episode_uuids,

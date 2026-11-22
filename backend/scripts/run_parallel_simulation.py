@@ -1006,20 +1006,25 @@ def create_model(config: Dict[str, Any], use_boost: bool = False):
         # 使用加速配置
         llm_api_key = boost_api_key
         llm_base_url = boost_base_url
-        llm_model = boost_model or os.environ.get("LLM_MODEL_NAME", "")
+        llm_model = boost_model
         config_label = "[加速LLM]"
     else:
         # 使用通用配置
         llm_api_key = os.environ.get("LLM_API_KEY", "")
         llm_base_url = os.environ.get("LLM_BASE_URL", "")
-        llm_model = os.environ.get("LLM_MODEL_NAME", "")
+        llm_model = ""
         config_label = "[通用LLM]"
     
+    # Without LLM_BOOST_MODEL_NAME the simulation-stage model is used:
+    # LLM_MODEL_SIMULATION > LLM_MODEL_NAME > provider default (rule lives in
+    # app.config.resolve_stage_model).
+    from app.config import resolve_stage_model
+
     llm_provider = os.environ.get("LLM_PROVIDER", "anthropic").strip().lower()
     if llm_provider == "anthropic":
         # Claude through camel's Anthropic backend. The boost settings share
         # the provider; LLM_BOOST_BASE_URL / LLM_BASE_URL are not used.
-        llm_model = llm_model or "claude-opus-5-5"
+        llm_model = llm_model or resolve_stage_model("simulation", provider="anthropic")
         if not llm_api_key:
             raise ValueError("缺少 API Key 配置，请在项目根目录 .env 文件中设置 LLM_API_KEY")
         os.environ["ANTHROPIC_API_KEY"] = llm_api_key
@@ -1032,7 +1037,10 @@ def create_model(config: Dict[str, Any], use_boost: bool = False):
 
     # 如果 .env 中没有模型名，则使用 config 作为备用
     if not llm_model:
-        llm_model = config.get("llm_model", "gpt-4o-mini")
+        # (openai: the config's llm_model, then the upstream fallback)
+        llm_model = resolve_stage_model(
+            "simulation", provider=llm_provider, default=config.get("llm_model")
+        )
     
     # 设置 camel-ai 所需的环境变量
     if llm_api_key:
