@@ -1,3 +1,5 @@
+> **Modified fork (2026-11-22):** 本仓库是 666ghj/MiroFish 的修改版（AGPL-3.0）：默认 LLM 为 Claude（Anthropic），知识图谱改为本地 SQLite 存储（移除 Zep Cloud），移除 Google Fonts。详见 [README.md](./README.md) 顶部的 "Modified fork" 一节。
+
 <div align="center">
 
 <img src="./static/image/MiroFish_logo_compressed.jpeg" alt="MiroFish Logo" width="75%"/>
@@ -115,16 +117,13 @@ cp .env.example .env
 **必需的环境变量：**
 
 ```env
-# LLM API配置（支持 OpenAI SDK 格式的任意 LLM API）
-# 推荐使用阿里百炼平台qwen-plus模型：https://bailian.console.aliyun.com/
+# LLM 配置：anthropic（默认）或 openai（任意 OpenAI 兼容服务，使用 LLM_BASE_URL）
 # 注意消耗较大，可先进行小于40轮的模拟尝试
-LLM_API_KEY=your_api_key
-LLM_BASE_URL=https://dashscope.aliyuncs.com/compatible-mode/v1
-LLM_MODEL_NAME=qwen-plus
+LLM_PROVIDER=anthropic
+LLM_API_KEY=your_anthropic_api_key
+LLM_MODEL_NAME=claude-opus-5-5
 
-# Zep Cloud 配置
-# 每月免费额度即可支撑简单使用：https://app.getzep.com/
-ZEP_API_KEY=your_zep_api_key
+# 知识图谱存储在本地（SQLite），无需图谱服务密钥。
 ```
 
 #### 2. 安装依赖
@@ -168,13 +167,12 @@ npm run frontend  # 仅启动前端
 # 1. 配置环境变量（同源码部署）
 cp .env.example .env
 
-# 2. 拉取镜像并启动
-docker compose up -d
+# 2. 基于本地源码构建镜像并启动
+docker compose up -d --build
 ```
 
 默认会读取根目录下的 `.env`，并映射端口 `3000（前端）/5001（后端）`
 
-> 在 `docker-compose.yml` 中已通过注释提供加速镜像地址，可按需替换
 
 ## 📬 更多交流
 

@@ -1,3 +1,28 @@
+# Modified fork (2026-11-22)
+
+This is a modified version of [666ghj/MiroFish](https://github.com/666ghj/MiroFish) (AGPL-3.0). Changes made on 2026-11-22:
+
+- **LLM provider = Claude by default.** New `LLM_PROVIDER` setting: `anthropic` (default, official `anthropic` SDK, model `claude-opus-5-5`) or `openai` (the previous OpenAI-compatible path, e.g. a local Ollama server). The two services that built their own OpenAI client and the OASIS agents (camel `ModelPlatformType.ANTHROPIC`) follow the same setting.
+- **Zep Cloud removed.** The knowledge graph is stored locally in SQLite (`backend/uploads/graph/graph.sqlite3`, standard library, FTS5 search). Entities and relations are extracted by the configured LLM using the project ontology. `zep-cloud` and `ZEP_API_KEY` are gone.
+- **Google Fonts removed** from `frontend/index.html`; the UI uses the system font fallbacks already in the CSS.
+- `docker-compose.yml` now builds this checkout (`build: .`) instead of pulling the upstream image.
+
+Claude requests use `output_config.effort: "medium"`, no sampling parameters, and Anthropic's server-side refusal fallback (`fallbacks: "default"`, which may re-run a declined request on another Claude model).
+
+**Resulting data flow:** with the default configuration the only external party that receives text (document chunks, ontology, extraction and simulation prompts) is the Anthropic API. The graph, search and all files stay on your machine.
+
+**Setup:** `cp .env.example .env`, then set `LLM_API_KEY` to an Anthropic API key (optionally `LLM_MODEL_NAME=claude-haiku-5-5` for lower cost). Nothing else is required.
+
+**Not verified:**
+- No live Claude API call was made; the Anthropic path was tested only against a mocked HTTP transport.
+- The OASIS/camel simulation path (`backend/scripts/run_*_simulation.py`) was not executed (camel/oasis not installed); it uses camel's Anthropic backend, which calls Anthropic's OpenAI-compatible endpoint.
+- Third-party dependencies' own network behaviour (camel-ai, oasis, tiktoken, npm/Vite tooling, etc.) was not audited.
+- Graph search is lexical (BM25 over SQLite FTS5 trigrams), not semantic; results differ from Zep's hybrid search.
+- The Docker image build (`docker compose up --build`) was not run.
+- Extraction quality and cost on large documents were not measured (every chunk, and every simulated agent action written to the graph, is one or more LLM calls).
+
+---
+
 <div align="center">
 
 <img src="./static/image/MiroFish_logo_compressed.jpeg" alt="MiroFish Logo" width="75%"/>
@@ -115,16 +140,13 @@ cp .env.example .env
 **Required Environment Variables:**
 
 ```env
-# LLM API Configuration (supports any LLM API with OpenAI SDK format)
-# Recommended: Alibaba Qwen-plus model via Bailian Platform: https://bailian.console.aliyun.com/
+# LLM configuration: anthropic (default) or openai (any OpenAI-compatible server, uses LLM_BASE_URL)
 # High consumption, try simulations with fewer than 40 rounds first
-LLM_API_KEY=your_api_key
-LLM_BASE_URL=https://dashscope.aliyuncs.com/compatible-mode/v1
-LLM_MODEL_NAME=qwen-plus
+LLM_PROVIDER=anthropic
+LLM_API_KEY=your_anthropic_api_key
+LLM_MODEL_NAME=claude-opus-5-5
 
-# Zep Cloud Configuration
-# Free monthly quota is sufficient for simple usage: https://app.getzep.com/
-ZEP_API_KEY=your_zep_api_key
+# The knowledge graph is stored locally (SQLite); no graph service key is needed.
 ```
 
 #### 2. Install Dependencies
@@ -168,13 +190,12 @@ npm run frontend  # Start frontend only
 # 1. Configure environment variables (same as source deployment)
 cp .env.example .env
 
-# 2. Pull image and start
-docker compose up -d
+# 2. Build the image from this checkout and start
+docker compose up -d --build
 ```
 
 Reads `.env` from root directory by default, maps ports `3000 (frontend) / 5001 (backend)`
 
-> Mirror address for faster pulling is provided as comments in `docker-compose.yml`, replace if needed.
 
 ## 📬 Join the Conversation
 
