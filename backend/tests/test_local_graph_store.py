@@ -53,7 +53,7 @@ EXTRACTIONS = {
         "relations": [
             {"source": "Alice", "target": "Acme", "type": "WORKS_AT", "fact": "Alice works at Acme"},
             {"source": "Bob", "target": "Alice", "type": "KNOWS", "fact": "Bob knows Alice"},
-            {"source": "Bob", "target": "张三", "type": "KNOWS", "fact": "Bob 认识 张三"},
+            {"source": "Bob", "target": "\u5f20\u4e09", "type": "KNOWS", "fact": "Bob knows \u5f20\u4e09"},
         ],
     },
 }
@@ -134,7 +134,7 @@ def test_add_process_creates_deduplicated_nodes_and_edges(tmp_path):
 
     nodes, edges = _all(client, graph_id)
     by_name = {node.name: node for node in nodes}
-    assert sorted(by_name) == ["Acme", "Alice", "Bob", "张三"]
+    assert sorted(by_name) == ["Acme", "Alice", "Bob", "\u5f20\u4e09"]
     alice = by_name["Alice"]
     assert alice.labels == ["Entity", "Person"]
     assert alice.summary == "Alice is an engineer. Alice lives in Paris."
@@ -144,7 +144,7 @@ def test_add_process_creates_deduplicated_nodes_and_edges(tmp_path):
     facts = sorted((edge.name, edge.fact) for edge in edges)
     assert facts == [
         ("RELATES_TO", "Bob knows Alice"),
-        ("RELATES_TO", "Bob 认识 张三"),
+        ("RELATES_TO", "Bob knows \u5f20\u4e09"),
         ("WORKS_AT", "Alice works at Acme"),
     ]
     works_at = next(edge for edge in edges if edge.name == "WORKS_AT")
@@ -206,8 +206,9 @@ def test_search_honours_scope_and_limit(tmp_path):
     assert len(limited.edges) == 1
 
     # Two-character CJK names are below the trigram size: substring fallback.
-    short = client.graph.search(graph_id=graph_id, query="张三", limit=5, scope="edges")
-    assert [edge.fact for edge in short.edges] == ["Bob 认识 张三"]
+    # "\u5f20\u4e09" is a two-character CJK name (Zhang San), written as escapes.
+    short = client.graph.search(graph_id=graph_id, query="\u5f20\u4e09", limit=5, scope="edges")
+    assert [edge.fact for edge in short.edges] == ["Bob knows \u5f20\u4e09"]
 
     assert client.graph.search(graph_id=graph_id, query="nothing matches", limit=5, scope="edges").edges == []
 
@@ -256,7 +257,7 @@ def test_graphs_are_isolated_through_every_read_method(tmp_path):
     with pytest.raises(NotFoundError):
         client.graph.episode.get(uuid_=episode_a, graph_id=graph_b)
     for scope in ("edges", "nodes"):
-        result = client.graph.search(graph_id=graph_b, query="Alice Acme 张三", limit=10, scope=scope)
+        result = client.graph.search(graph_id=graph_b, query="Alice Acme \u5f20\u4e09", limit=10, scope=scope)
         assert result.edges == [] and result.nodes == []
 
     # Same entity name in graph B becomes its own node; graph A is unchanged.

@@ -1,5 +1,5 @@
 """
-LLM客户端封装
+LLM client wrapper
 
 Two providers share one OpenAI-shaped call surface
 (``client.chat.completions.create``):
@@ -225,7 +225,7 @@ def create_llm_sdk_client(
 
 
 class LLMClient:
-    """LLM客户端"""
+    """LLM client"""
     
     def __init__(
         self,
@@ -246,7 +246,7 @@ class LLMClient:
             self.model = Config.LLM_MODEL_NAME
         
         if not self.api_key:
-            raise ValueError("LLM_API_KEY 未配置")
+            raise ValueError("LLM_API_KEY is not configured")
         
         self.client = create_llm_sdk_client(self.api_key, self.base_url)
 
@@ -277,16 +277,16 @@ class LLMClient:
         response_format: Optional[Dict] = None
     ) -> str:
         """
-        发送聊天请求
+        Send a chat request
         
         Args:
-            messages: 消息列表
-            temperature: 温度参数
-            max_tokens: 最大token数
-            response_format: 响应格式（如JSON模式）
+            messages: list of messages
+            temperature: temperature
+            max_tokens: maximum number of tokens
+            response_format: response format (e.g. JSON mode)
             
         Returns:
-            模型响应文本
+            The model's response text
         """
         response = self._create_completion(
             messages=messages,
@@ -305,16 +305,16 @@ class LLMClient:
         max_attempts: int = 1,
     ) -> Dict[str, Any]:
         """
-        发送聊天请求并返回JSON
+        Send a chat request and return JSON
         
         Args:
-            messages: 消息列表
-            temperature: 温度参数
-            max_tokens: 最大token数
-            max_attempts: 内容生成尝试次数（不含一次明确的JSON模式能力降级）
+            messages: list of messages
+            temperature: temperature
+            max_tokens: maximum number of tokens
+            max_attempts: number of content generation attempts (not counting one explicit fallback when JSON mode is unsupported)
             
         Returns:
-            解析后的JSON对象
+            The parsed JSON object
         """
         if max_attempts < 1:
             raise ValueError("max_attempts must be at least 1")

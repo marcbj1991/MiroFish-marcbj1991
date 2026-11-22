@@ -2,7 +2,7 @@
 
 This is a modified version of [666ghj/MiroFish](https://github.com/666ghj/MiroFish) (AGPL-3.0). Changes made on 2026-11-22:
 
-- **LLM provider = Claude by default.** New `LLM_PROVIDER` setting: `anthropic` (default, official `anthropic` SDK, model `claude-opus-5-5`) or `openai` (the previous OpenAI-compatible path, e.g. a local Ollama server). The two services that built their own OpenAI client and the OASIS agents (camel `ModelPlatformType.ANTHROPIC`) follow the same setting.
+- **LLM provider = Claude by default.** New `LLM_PROVIDER` setting: `anthropic` (default, official `anthropic` SDK) or `openai` (the previous OpenAI-compatible path: OpenAI/ChatGPT or, for example, a local Ollama server). The two services that built their own OpenAI client and the OASIS agents (camel `ModelPlatformType.ANTHROPIC`) follow the same setting.
 - **Zep Cloud removed.** The knowledge graph is stored locally in SQLite (`backend/uploads/graph/graph.sqlite3`, standard library, FTS5 search). Entities and relations are extracted by the configured LLM using the project ontology. `zep-cloud` and `ZEP_API_KEY` are gone.
 - **Google Fonts removed** from `frontend/index.html`; the UI uses the system font fallbacks already in the CSS.
 - `docker-compose.yml` now builds this checkout (`build: .`) instead of pulling the upstream image.
@@ -12,13 +12,17 @@ Claude requests use `output_config.effort: "medium"`, no sampling parameters, an
 
 **Resulting data flow:** with the default configuration the only external party that receives text (document chunks, ontology, extraction and simulation prompts) is the Anthropic API. The graph, search and all files stay on your machine.
 
-**Setup:** `cp .env.example .env`, then set `LLM_API_KEY` to an Anthropic API key (optionally `LLM_MODEL_NAME=claude-haiku-5-5` for lower cost). Nothing else is required.
+**Models per stage.** MiroFish runs three LLM stages, and each one can use its own model. The `graph` stage (`LLM_MODEL_GRAPH`) generates the ontology and extracts entities from your uploaded documents. The `simulation` stage (`LLM_MODEL_SIMULATION`) covers agent profiles, the simulation config, the OASIS agents and the high-volume extraction of agent activity into the graph during a run. The `report` stage (`LLM_MODEL_REPORT`) covers the report agent, its chat and its tools. For each stage, its own variable wins; if it is unset, `LLM_MODEL_NAME` applies, so setting only `LLM_MODEL_NAME` gives you one model everywhere (for example `LLM_MODEL_NAME=claude-haiku-5-5` for the lowest cost). If neither is set, the provider's default applies: with `LLM_PROVIDER=anthropic` that is `claude-sonnet-5-5` for graph, `claude-haiku-5-5` for simulation and `claude-opus-5-5` for report. With `LLM_PROVIDER=openai` (OpenAI/ChatGPT or any OpenAI-compatible server such as a local Ollama) there are no per-stage defaults, so set `LLM_MODEL_NAME` and, optionally, the three stage variables. `LLM_BOOST_MODEL_NAME` still overrides the simulation model on the boost platform of a parallel simulation.
+
+**Setup:** `cp .env.example .env`, then set `LLM_API_KEY` to an Anthropic API key. Nothing else is required. `.env.example` also has a commented block for OpenAI/ChatGPT.
 
 **Not verified:**
 - No live Claude API call was made; the Anthropic path was tested only against a mocked HTTP transport.
 - The OASIS/camel simulation path (`backend/scripts/run_*_simulation.py`) was not executed (camel/oasis not installed); it uses camel's Anthropic backend, which calls Anthropic's OpenAI-compatible endpoint.
 - Third-party dependencies were audited statically only (source read, nothing executed). Two automatic downloads remain; neither carries user text: the `Twitter/twhin-bert-base` model from `huggingface.co` (Twitter simulation only) and the tiktoken vocabulary from `openaipublic.blob.core.windows.net` (first token count). Both can be blocked with `HF_HUB_OFFLINE=1` and a preloaded `TIKTOKEN_CACHE_DIR`. Large binary packages (torch, nvidia-*) and the `mcp` package were not read.
 - The API has no authentication and listens on all network interfaces by default (`FLASK_HOST`, `vite --host`, compose ports). This fork does not change that.
+- All LLM prompts were translated from Chinese to English and were not run against a live model; model behaviour can differ from upstream.
+- English is the only interface language. The other entries in `locales/languages.json` (es, fr, pt, ru, de) have no translation file, so they cannot be selected and the model is always told to answer in English.
 - Graph search is lexical (BM25 over SQLite FTS5 trigrams), not semantic; results differ from Zep's hybrid search.
 - The Docker image build (`docker compose up --build`) was not run.
 - Extraction quality and cost on large documents were not measured (every chunk, and every simulated agent action written to the graph, is one or more LLM calls).
@@ -119,7 +123,8 @@ cp .env.example .env
 # High consumption, try simulations with fewer than 40 rounds first
 LLM_PROVIDER=anthropic
 LLM_API_KEY=your_anthropic_api_key
-LLM_MODEL_NAME=claude-opus-5-5
+# Optional: one model for every stage (lowest cost). Without it, each stage uses its own default.
+# LLM_MODEL_NAME=claude-haiku-5-5
 
 # The knowledge graph is stored locally (SQLite); no graph service key is needed.
 ```

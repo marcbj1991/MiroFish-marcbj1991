@@ -1,6 +1,6 @@
 """
-图谱构建服务
-接口2：在本地图谱存储（SQLite）中构建 Standalone Graph
+Graph building service
+Interface 2: build a Standalone Graph in the local graph store (SQLite)
 """
 
 import hashlib
@@ -31,7 +31,7 @@ from ..utils.locale import t, get_locale, set_locale
 
 @dataclass
 class GraphInfo:
-    """图谱信息"""
+    """Graph information"""
     graph_id: str
     node_count: int
     edge_count: int
@@ -58,8 +58,8 @@ class BatchSubmission:
 
 class GraphBuilderService:
     """
-    图谱构建服务
-    负责在本地图谱存储中构建知识图谱
+    Graph building service
+    Responsible for building the knowledge graph in the local graph store
     """
     
     def __init__(self):
@@ -76,20 +76,20 @@ class GraphBuilderService:
         batch_size: int = 350
     ) -> str:
         """
-        异步构建图谱
+        Build the graph asynchronously
         
         Args:
-            text: 输入文本
-            ontology: 本体定义（来自接口1的输出）
-            graph_name: 图谱名称
-            chunk_size: 文本块大小
-            chunk_overlap: 块重叠大小
-            batch_size: 每批发送的块数量
+            text: Input text
+            ontology: Ontology definition (output of interface 1)
+            graph_name: Graph name
+            chunk_size: Text chunk size
+            chunk_overlap: Chunk overlap size
+            batch_size: Number of chunks sent per batch
             
         Returns:
-            任务ID
+            Task ID
         """
-        # 创建任务
+        # Create the task
         task_id = self.task_manager.create_task(
             task_type="graph_build",
             metadata={
@@ -102,7 +102,7 @@ class GraphBuilderService:
         # Capture locale before spawning background thread
         current_locale = get_locale()
 
-        # 在后台线程中执行构建
+        # Run the build in a background thread
         thread = threading.Thread(
             target=self._build_graph_worker,
             args=(task_id, text, ontology, graph_name, chunk_size, chunk_overlap, batch_size, current_locale)
@@ -121,9 +121,9 @@ class GraphBuilderService:
         chunk_size: int,
         chunk_overlap: int,
         batch_size: int,
-        locale: str = 'zh'
+        locale: str = 'en'
     ):
-        """图谱构建工作线程"""
+        """Graph building worker thread"""
         set_locale(locale)
         try:
             self.task_manager.update_task(
@@ -139,7 +139,7 @@ class GraphBuilderService:
             self.validate_batch_chunks(chunks, batch_size=batch_size)
             total_chunks = len(chunks)
 
-            # 1. 创建图谱
+            # 1. Create the graph
             graph_id = self.create_graph(graph_name)
             self.task_manager.update_task(
                 task_id,
@@ -147,7 +147,7 @@ class GraphBuilderService:
                 message=t('progress.graphCreated', graphId=graph_id)
             )
             
-            # 2. 设置本体
+            # 2. Set the ontology
             self.set_ontology(graph_id, ontology)
             self.task_manager.update_task(
                 task_id,
@@ -155,14 +155,14 @@ class GraphBuilderService:
                 message=t('progress.ontologySet')
             )
             
-            # 3. 文本分块已在 Cloud mutation 前完成并验证
+            # 3. Text chunking was already done and validated before the Cloud mutation
             self.task_manager.update_task(
                 task_id,
                 progress=20,
                 message=t('progress.textSplit', count=total_chunks)
             )
             
-            # 4. 分批发送数据
+            # 4. Send the data in batches
             submission = self.add_text_batches(
                 graph_id, chunks, batch_size,
                 lambda msg, prog: self.task_manager.update_task(
@@ -172,7 +172,7 @@ class GraphBuilderService:
                 )
             )
             
-            # 5. 等待Zep处理完成
+            # 5. Wait for Zep to finish processing
             self.task_manager.update_task(
                 task_id,
                 progress=60,
@@ -188,7 +188,7 @@ class GraphBuilderService:
                 )
             )
             
-            # 6. 获取图谱信息
+            # 6. Get the graph information
             self.task_manager.update_task(
                 task_id,
                 progress=90,
@@ -197,7 +197,7 @@ class GraphBuilderService:
             
             graph_info = self._get_graph_info(graph_id)
             
-            # 完成
+            # Done
             self.task_manager.complete_task(task_id, {
                 "graph_id": graph_id,
                 "graph_info": graph_info.to_dict(),
@@ -240,14 +240,14 @@ class GraphBuilderService:
         ).hexdigest()
 
     def set_ontology(self, graph_id: str, ontology: Dict[str, Any]):
-        """设置图谱本体（公开方法）
+        """Set the graph ontology (public method)
 
         Stores a normalized copy of the ontology on the local graph. The
         extraction step gives it to the LLM as the allowed entity/edge types.
         """
 
         def safe_attr_name(attr_name: str) -> str:
-            """将保留名称转换为安全名称"""
+            """Convert reserved names into safe names"""
             if attr_name.lower() in RESERVED_ONTOLOGY_ATTRIBUTE_NAMES:
                 return f"entity_{attr_name}"
             return attr_name
@@ -536,14 +536,14 @@ class GraphBuilderService:
         return episode_uuids
     
     def _get_graph_info(self, graph_id: str) -> GraphInfo:
-        """获取图谱信息"""
-        # 获取节点（分页）
+        """Get graph information"""
+        # Get nodes (paginated)
         nodes = fetch_all_nodes(self.client, graph_id)
 
-        # 获取边（分页）
+        # Get edges (paginated)
         edges = fetch_all_edges(self.client, graph_id)
 
-        # 统计实体类型
+        # Count entity types
         entity_types = set()
         for node in nodes:
             if node.labels:
@@ -560,25 +560,25 @@ class GraphBuilderService:
     
     def get_graph_data(self, graph_id: str) -> Dict[str, Any]:
         """
-        获取完整图谱数据（包含详细信息）
+        Get the full graph data (with detailed information)
         
         Args:
-            graph_id: 图谱ID
+            graph_id: Graph ID
             
         Returns:
-            包含nodes和edges的字典，包括时间信息、属性等详细数据
+            Dict containing nodes and edges, including time information, attributes and other details
         """
         nodes = fetch_all_nodes(self.client, graph_id)
         edges = fetch_all_edges(self.client, graph_id)
 
-        # 创建节点映射用于获取节点名称
+        # Build a node map used to look up node names
         node_map = {}
         for node in nodes:
             node_map[node.uuid_] = node.name or ""
         
         nodes_data = []
         for node in nodes:
-            # 获取创建时间
+            # Get the creation time
             created_at = getattr(node, 'created_at', None)
             if created_at:
                 created_at = str(created_at)
@@ -594,20 +594,20 @@ class GraphBuilderService:
         
         edges_data = []
         for edge in edges:
-            # 获取时间信息
+            # Get time information
             created_at = getattr(edge, 'created_at', None)
             valid_at = getattr(edge, 'valid_at', None)
             invalid_at = getattr(edge, 'invalid_at', None)
             expired_at = getattr(edge, 'expired_at', None)
             
-            # 获取 episodes
+            # Get episodes
             episodes = getattr(edge, 'episodes', None) or getattr(edge, 'episode_ids', None)
             if episodes and not isinstance(episodes, list):
                 episodes = [str(episodes)]
             elif episodes:
                 episodes = [str(e) for e in episodes]
             
-            # 获取 fact_type
+            # Get fact_type
             fact_type = getattr(edge, 'fact_type', None) or edge.name or ""
             
             edges_data.append({
@@ -636,5 +636,5 @@ class GraphBuilderService:
         }
     
     def delete_graph(self, graph_id: str):
-        """删除图谱"""
+        """Delete the graph"""
         self.client.graph.delete(graph_id=graph_id)
