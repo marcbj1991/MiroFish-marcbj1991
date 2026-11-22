@@ -37,10 +37,9 @@ def _client(add):
 
 def _updater(monkeypatch, add, simulation_id="sim-1"):
     client = _client(add)
-    monkeypatch.setattr(updater_module, "get_zep_client", lambda _key: client)
+    monkeypatch.setattr(updater_module, "get_zep_client", lambda: client)
     updater = ZepGraphMemoryUpdater(
         "graph-1",
-        api_key="test-key",
         simulation_id=simulation_id,
     )
     updater.SEND_INTERVAL = 0

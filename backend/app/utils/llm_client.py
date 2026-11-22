@@ -1,15 +1,23 @@
 """
-LLM客户端封装
-统一使用OpenAI格式调用
+LLM client wrapper
+
+Two providers share one OpenAI-shaped call surface
+(``client.chat.completions.create``):
+
+* ``anthropic`` (default): the official Anthropic SDK (Messages API).
+* ``openai``: any OpenAI-compatible server (unchanged legacy path).
 """
 
 import json
 import logging
 import re
+from types import SimpleNamespace
 from typing import Optional, Dict, Any, List
+
+import anthropic
 from openai import OpenAI
 
-from ..config import Config
+from ..config import Config, resolve_stage_model
 from .openai_chat_compat import create_chat_completion, extract_chat_completion_text
 
 
@@ -88,26 +96,159 @@ def _contains_additional_json_container(content: str) -> bool:
     return False
 
 
+class LLMRefusalError(LLMResponseError):
+    """Claude declined the request (``stop_reason == "refusal"``)."""
+
+
+# Anthropic request policy. Thinking is always on for current Claude models
+# and its tokens count against max_tokens, so small caller caps are raised to
+# this floor (non-streaming requests should stay around 16k).
+ANTHROPIC_MIN_MAX_TOKENS = 16000
+ANTHROPIC_EFFORT = "medium"
+# Server-side refusal fallback (Anthropic's recommended substitute model).
+ANTHROPIC_FALLBACK_BETA = "server-side-fallback-2026-07-01"
+ANTHROPIC_JSON_INSTRUCTION = (
+    "Respond with exactly one valid JSON object and nothing else: no Markdown "
+    "code fences, no text before or after the object."
+)
+_ANTHROPIC_FINISH_REASONS = {
+    "end_turn": "stop",
+    "stop_sequence": "stop",
+    "max_tokens": "length",
+}
+
+
+class _AnthropicChatCompletions:
+    """Translate an OpenAI-style chat request into one Messages API call."""
+
+    def __init__(self, client: "anthropic.Anthropic"):
+        self._client = client
+
+    def create(
+        self,
+        *,
+        model: str,
+        messages: List[Dict[str, Any]],
+        temperature: Optional[float] = None,
+        max_tokens: Optional[int] = None,
+        max_completion_tokens: Optional[int] = None,
+        response_format: Optional[Dict[str, Any]] = None,
+    ) -> Any:
+        # temperature is accepted for signature compatibility and ignored:
+        # current Claude models reject sampling parameters.
+        system_parts = [
+            str(message.get("content") or "")
+            for message in messages
+            if message.get("role") == "system"
+        ]
+        if response_format and response_format.get("type") == "json_object":
+            system_parts.append(ANTHROPIC_JSON_INSTRUCTION)
+        chat_messages = [
+            {"role": message["role"], "content": message.get("content") or ""}
+            for message in messages
+            if message.get("role") != "system"
+        ]
+
+        requested = max_tokens or max_completion_tokens or 0
+        kwargs: Dict[str, Any] = {
+            "model": model,
+            "max_tokens": max(requested, ANTHROPIC_MIN_MAX_TOKENS),
+            "messages": chat_messages,
+            "output_config": {"effort": ANTHROPIC_EFFORT},
+        }
+        system = "\n\n".join(part for part in system_parts if part.strip())
+        if system:
+            kwargs["system"] = system
+        # Haiku has no server-side fallback; every other current model does.
+        if not model.startswith("claude-haiku"):
+            kwargs["betas"] = [ANTHROPIC_FALLBACK_BETA]
+            kwargs["fallbacks"] = "default"
+
+        response = self._client.beta.messages.create(**kwargs)
+
+        stop_reason = getattr(response, "stop_reason", None)
+        if stop_reason == "refusal":
+            details = getattr(response, "stop_details", None)
+            category = getattr(details, "category", None) if details else None
+            raise LLMRefusalError(
+                f"Claude declined the request (stop_reason=refusal, category={category})",
+                finish_reason="refusal",
+            )
+        text = "".join(
+            block.text
+            for block in (getattr(response, "content", None) or [])
+            if getattr(block, "type", None) == "text"
+        )
+        return SimpleNamespace(
+            model=getattr(response, "model", model),
+            choices=[
+                SimpleNamespace(
+                    message=SimpleNamespace(content=text),
+                    finish_reason=_ANTHROPIC_FINISH_REASONS.get(
+                        stop_reason, stop_reason
+                    ),
+                )
+            ],
+        )
+
+
+class AnthropicChatAdapter:
+    """Anthropic SDK client exposing ``.chat.completions.create``."""
+
+    def __init__(self, api_key: str, http_client: Any = None):
+        client_kwargs: Dict[str, Any] = {"api_key": api_key}
+        if http_client is not None:
+            client_kwargs["http_client"] = http_client
+        self.anthropic = anthropic.Anthropic(**client_kwargs)
+        self.chat = SimpleNamespace(
+            completions=_AnthropicChatCompletions(self.anthropic)
+        )
+
+
+def create_llm_sdk_client(
+    api_key: str,
+    base_url: Optional[str] = None,
+    provider: Optional[str] = None,
+) -> Any:
+    """Return the SDK client for the configured provider.
+
+    Both return values support ``client.chat.completions.create(...)`` as
+    used by ``openai_chat_compat.create_chat_completion``.
+    """
+
+    provider = (provider or Config.LLM_PROVIDER).strip().lower()
+    if provider == "anthropic":
+        return AnthropicChatAdapter(api_key)
+    if provider == "openai":
+        return OpenAI(api_key=api_key, base_url=base_url or Config.LLM_BASE_URL)
+    raise ValueError(f"Unsupported LLM_PROVIDER: {provider}")
+
+
 class LLMClient:
-    """LLM客户端"""
+    """LLM client"""
     
     def __init__(
         self,
         api_key: Optional[str] = None,
         base_url: Optional[str] = None,
-        model: Optional[str] = None
+        model: Optional[str] = None,
+        stage: Optional[str] = None,
     ):
         self.api_key = api_key or Config.LLM_API_KEY
         self.base_url = base_url or Config.LLM_BASE_URL
-        self.model = model or Config.LLM_MODEL_NAME
+        # An explicit model wins; otherwise the pipeline stage picks it
+        # (see config.resolve_stage_model).
+        if model:
+            self.model = model
+        elif stage:
+            self.model = resolve_stage_model(stage)
+        else:
+            self.model = Config.LLM_MODEL_NAME
         
         if not self.api_key:
-            raise ValueError("LLM_API_KEY 未配置")
+            raise ValueError("LLM_API_KEY is not configured")
         
-        self.client = OpenAI(
-            api_key=self.api_key,
-            base_url=self.base_url
-        )
+        self.client = create_llm_sdk_client(self.api_key, self.base_url)
 
     def _create_completion(
         self,
@@ -136,16 +277,16 @@ class LLMClient:
         response_format: Optional[Dict] = None
     ) -> str:
         """
-        发送聊天请求
+        Send a chat request
         
         Args:
-            messages: 消息列表
-            temperature: 温度参数
-            max_tokens: 最大token数
-            response_format: 响应格式（如JSON模式）
+            messages: list of messages
+            temperature: temperature
+            max_tokens: maximum number of tokens
+            response_format: response format (e.g. JSON mode)
             
         Returns:
-            模型响应文本
+            The model's response text
         """
         response = self._create_completion(
             messages=messages,
@@ -164,16 +305,16 @@ class LLMClient:
         max_attempts: int = 1,
     ) -> Dict[str, Any]:
         """
-        发送聊天请求并返回JSON
+        Send a chat request and return JSON
         
         Args:
-            messages: 消息列表
-            temperature: 温度参数
-            max_tokens: 最大token数
-            max_attempts: 内容生成尝试次数（不含一次明确的JSON模式能力降级）
+            messages: list of messages
+            temperature: temperature
+            max_tokens: maximum number of tokens
+            max_attempts: number of content generation attempts (not counting one explicit fallback when JSON mode is unsupported)
             
         Returns:
-            解析后的JSON对象
+            The parsed JSON object
         """
         if max_attempts < 1:
             raise ValueError("max_attempts must be at least 1")
